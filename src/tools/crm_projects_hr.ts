@@ -130,6 +130,7 @@ export const projectTools: Tool[] = [
       type: 'object',
       properties: {
         project_id: { type: 'number', description: 'ID du projet parent' },
+        ref: { type: 'string', description: 'Référence de la tâche (auto par défaut)' },
         label: { type: 'string', description: 'Titre de la tâche' },
         description: { type: 'string', description: 'Description de la tâche' },
         date_start: { type: 'string', description: 'Date de début ISO 8601' },
@@ -245,6 +246,10 @@ export async function handleCrmTool(name: string, args: Record<string, unknown>,
 }
 
 export async function handleProjectTool(name: string, args: Record<string, unknown>, api: DolibarrAPI): Promise<string> {
+  const id = name === 'list_tasks' || name === 'create_task' ? args.project_id : args.id;
+  if (['get_project', 'create_task'].includes(name) && id === undefined) throw new Error('ID requis');
+  if (id !== undefined && (!Number.isSafeInteger(id) || (id as number) < 1)) throw new Error('ID invalide');
+  if (args.limit !== undefined && (!Number.isSafeInteger(args.limit) || (args.limit as number) < 1)) throw new Error('Limite invalide');
   switch (name) {
     case 'list_projects': {
       const params: Record<string, unknown> = { limit: args.limit || 100 };
@@ -257,7 +262,7 @@ export async function handleProjectTool(name: string, args: Record<string, unkno
     case 'get_project': {
       const [project, tasks] = await Promise.all([
         api.get(`/projects/${args.id}`),
-        api.get('/tasks', { project_id: args.id, limit: 100 }),
+        api.get(`/projects/${args.id}/tasks`),
       ]);
       return JSON.stringify({ project, tasks }, null, 2);
     }
@@ -269,16 +274,20 @@ export async function handleProjectTool(name: string, args: Record<string, unkno
       return `✅ Projet créé. ID: ${id}\nRef: ${args.ref} | Titre: ${args.title}`;
     }
     case 'list_tasks': {
-      const params: Record<string, unknown> = { limit: args.limit || 100 };
-      if (args.project_id) params.filters = `fk_projet:${args.project_id}`;
-      const data = await api.get('/tasks', params);
+      const data = args.project_id !== undefined
+        ? await api.get<unknown[]>(`/projects/${args.project_id}/tasks`)
+        : await api.get<unknown[]>('/tasks', { limit: args.limit ?? 100 });
+      if (!Array.isArray(data)) throw new Error('La réponse des tâches doit être une liste');
+      if (args.project_id !== undefined && args.limit !== undefined) return JSON.stringify(data.slice(0, args.limit as number), null, 2);
       return JSON.stringify(data, null, 2);
     }
     case 'create_task': {
       const date_start = args.date_start ? Math.floor(new Date(args.date_start as string).getTime() / 1000) : null;
       const date_end = args.date_end ? Math.floor(new Date(args.date_end as string).getTime() / 1000) : null;
-      const payload = { ...args, date_start, date_end };
-      const id = await api.post('/tasks', { ...payload, fk_project: args.project_id });
+      const { project_id, ref = 'auto', ...fields } = args;
+      if (typeof ref !== 'string' || !ref.trim()) throw new Error('Référence invalide');
+      if (Number.isNaN(date_start) || Number.isNaN(date_end)) throw new Error('Date invalide');
+      const id = await api.post('/tasks', { ...fields, date_start, date_end, ref, fk_project: project_id });
       return `✅ Tâche créée dans le projet #${args.project_id}. ID tâche: ${id}\nLabel: ${args.label}`;
     }
     default:

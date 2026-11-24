@@ -21,6 +21,7 @@ export class DolibarrAPI {
         'DOLAPIKEY': apiKey,
       },
       timeout: 30000,
+      maxRedirects: 0,
     });
 
     // Interceptor for clean error messages
